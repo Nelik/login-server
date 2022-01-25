@@ -13,12 +13,13 @@ const csrf = require('csurf');
 // Use b-crypt to hash passwords
 const bcrypt = require('bcrypt');
 const redis = require('redis');
-const dateTimeUtils = require('./utils/dateTimeUtils');
+const logger = require('./utils/logger');
+const httpStatusCodes = require('./utils/httpStatusCodes');
 
 const bCryptSaltRounds = 10;
 const jwtTimeLimitSeconds = 15 * 60;
 const sessionExpiryTime = 15 * 60;
-let jwtToken = '';
+let jwtSecret = '';
 
 AWS.config.update({
   region: 'us-west-2',
@@ -31,35 +32,34 @@ var secretsManagerRequest = {
 };
 secretsManagerClient.getSecretValue(secretsManagerRequest, function (err, data) {
   if (err) {
-    console.log(err, err.stack);
+    logger.error(`AWS Secret Manager Client error. Stack: ${err.stack}`);
   } else {
-    jwtToken = data.SecretString;
+    jwtSecret = data.SecretString;
   }
 });
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+
 // Setting up cookie and CSRF protection
 app.use(cookieParser());
 const csrfProtection = csrf({
   cookie: true,
 });
 app.use(csrfProtection);
-// enable this if you run behind a proxy (e.g. nginx)
-app.set('trust proxy', 1);
+app.use(cors());
 
-//Configure redis client
+// Configure redis client
 const redisClient = redis.createClient({
   host: 'localhost',
   port: 6379,
 });
 redisClient.connect();
 redisClient.on('error', function (err) {
-  console.log('Could not establish a connection with redis. ' + err);
+  logger.error('Could not establish a connection with redis. ' + err);
 });
 redisClient.on('connect', function (err) {
-  console.log('Connected to redis successfully');
+  logger.info('Connected to redis successfully');
 });
 
 // Set morgan to log HTTP requests
@@ -71,7 +71,7 @@ morgan.token('csrfToken', function (req, res, param) {
 });
 app.use(
   morgan('common', {
-    stream: fs.createWriteStream('./access.log', { flags: 'a' }),
+    stream: fs.createWriteStream('./logs/access.log', { flags: 'a' }),
   })
 );
 app.use(
@@ -84,6 +84,9 @@ app.use(
  * Create a token to protect against cross site request forgery.
  */
 app.get('/csrf-token', (req, res) => {
+  new Promise((resolve, reject) => {
+    setTimeout(() => reject('woops'), 5);
+  });
   res.json({ csrfToken: req.csrfToken() });
 });
 
@@ -92,24 +95,22 @@ app.get('/csrf-token', (req, res) => {
  */
 app.get('/is-logged-in', async (req, res) => {
   const token = req.cookies.token;
-  console.log('Is logged in called.');
-  console.log(token);
-
   //If there's no session cookie, the user is not logged in.
   if (token === undefined) {
+    logger.debug('Called is-logged-in without providing token.');
     res.json({ message: "User isn't logged in.", isLoggedIn: false });
     return;
   }
 
-  //When a token is present, verify that it exists in Redis.
+  // When a token is present, verify that it exists in Redis.
   result = await redisClient.exists(token);
 
-  //If token is present, user is considered logged in.
+  // If token is present, user is considered logged in.
   if (result === 1) {
-    console.log('is logged in');
+    logger.debug('is logged in');
     res.json({ message: 'User is logged in.', isLoggedIn: true });
   } else {
-    console.log('is not logged in');
+    logger.debug('is not logged in');
     res.json({ message: "User isn't logged in.", isLoggedIn: false });
   }
 });
@@ -118,22 +119,9 @@ app.get('/is-logged-in', async (req, res) => {
  * Invalidate cookie in a storage
  */
 app.get('/log-out', async (req, res) => {
-  console.log('Cookies: ', req.cookies.token);
   const token = req.cookies.token;
-  console.log('Token: ', token);
-
-  function deleteToken(token) {
-    return new Promise((resolve, reject) => {
-      redisClient.del(token, (err, reply) => {
-        resolve(reply);
-      });
-    });
-  }
-
-  //const result = await deleteToken(token);
-  console.log(`Deleting user session.`);
-  a = await redisClient.del(token);
-  console.log(a);
+  await redisClient.del(token);
+  logger.info(`Logging out. Token ${token} has been invalidated.`);
   res.json({ message: 'User has been successfully logged out.' });
 });
 
@@ -143,10 +131,11 @@ app.get('/log-out', async (req, res) => {
 app.post('/log-in', (req, res, next) => {
   const { username, password } = req.body;
   if (!username || !password) {
-    res.status(400).json({ error: 'Log-in error. Username  and password are requiered.' });
+    logger.info('Login unsuccessfull. Some information is missing.');
+    res.status(httpStatusCodes.BAD_REQUEST).json({ error: 'Log-in error. Username  and password are requiered.' });
     return;
   }
-  console.log('Logging in with user: ' + username);
+  logger.info('Logging in with user: ' + username);
   var params = {
     Key: {
       username: {
@@ -158,23 +147,20 @@ app.post('/log-in', (req, res, next) => {
 
   ddbClient.getItem(params, async function (err, data) {
     if (err) {
-      console.log('Unable to query. Error:', JSON.stringify(err, null, 2));
-      res.status(500).json({ error: 'DB error.' });
+      logger.error(`Log in: Unable to query. Error: ${JSON.stringify(err, null, 2)}`);
+      res
+        .status(httpStatusCodes.INTERNAL_SERVER)
+        .json({ error: 'There was an unexpected error. Please, try to log in again.' });
     } else if (data.Item) {
-      console.log(data);
       // Compare password with the hash in DB
       const isCorrectPswd = await bcrypt.compare(password, data.Item.password.S);
-      console.log(isCorrectPswd);
-      console.log(data.Item.password.S);
-      // Password is correct => procceed with log in
       if (isCorrectPswd) {
-        console.log(`Generating token for user ${username}`);
-        // Generate and send a cookie and a jwtToken for the user with expire time
-
+        logger.info(`Generating token for user ${username}`);
+        // Generate jwtToken, set a cookie with expire time and send a response
         createSession(username, req, res);
       } else {
-        // Incorrect password => send an error back
-        res.status(401).json({ error: 'User or password is not valid.' });
+        logger.info(`${username} provided wrong password.`);
+        res.status(httpStatusCodes.UNAUTHORIZED).json({ error: 'User or password is not valid.' });
       }
     }
   });
@@ -186,7 +172,13 @@ app.post('/log-in', (req, res, next) => {
  */
 app.post('/sign-up', (req, res, next) => {
   const { username, password, email } = req.body;
-  console.log('Signing up user' + username);
+  if (!username || !password || !email) {
+    logger.info('Sign up unsuccessfull. Some information is missing.');
+    res
+      .status(httpStatusCodes.BAD_REQUEST)
+      .json({ error: 'Sign-un error. Username, password and email are requiered.' });
+    return;
+  }
   const getUserParams = {
     Key: {
       username: {
@@ -199,10 +191,13 @@ app.post('/sign-up', (req, res, next) => {
   // First check if user already exists
   ddbClient.getItem(getUserParams, async function (err, data) {
     if (err) {
-      console.log('Unable to query. Error:', JSON.stringify(err, null, 2));
-      res.status(403).json({ error: 'DB error.' });
+      logger.error('Sign up: Unable to query. Error:', JSON.stringify(err, null, 2));
+      res
+        .status(httpStatusCodes.INTERNAL_SERVER)
+        .json({ error: 'An unexpected error happened, please try to sign up again.' });
     } else if (data.Item) {
-      res.status(403).json({ error: `User ${username} already exists.` });
+      logger.info('User already exists.');
+      res.status(httpStatusCodes.FORBIDDEN).json({ error: `User ${username} already exists.` });
     } else {
       // Create parameters to insert a new user to DB
       const encryptedPassword = await bcrypt.hash(password, bCryptSaltRounds);
@@ -225,17 +220,32 @@ app.post('/sign-up', (req, res, next) => {
 
       // Create a new user in DB and generate JWT token
       ddbClient.putItem(newUserParams, function (err, data) {
-        console.log(data);
         if (err) {
-          res.status(500).json({ error: `Failed to add user ${username}. Please, try again later.` });
+          logger.info('Sign up: unable to add. Error:', JSON.stringify(err, null, 2));
+          res
+            .status(httpStatusCodes.INTERNAL_SERVER)
+            .json({ error: `Failed to add user ${username}. Please, try again later.` });
         } else {
           // Generate and send a cookie and a jwtToken for the user with expire time
-
           createSession(username, req, res);
         }
       });
     }
   });
+});
+
+/**
+ * Send a response to an invalid endpoint called for GET method.
+ */
+app.get('*', function (req, res) {
+  res.status(httpStatusCodes.NOT_FOUND).json({ error: 'An invalid endpoint has been called.' });
+});
+
+/**
+ * Send a response to an invalid endpoint called for POST method.
+ */
+app.post('*', function (req, res) {
+  res.status(httpStatusCodes.NOT_FOUND).json({ error: 'An invalid endpoint has been called.' });
 });
 
 /**
@@ -253,7 +263,7 @@ function createSession(username, req, res) {
 
   res.cookie('token', token, { httpOnly: true }, { expire: new Date() + jwtTimeLimitSeconds * 1000 });
   res.json({ message: 'User is logged in.' });
-
+  logger.info(`User ${username} has been successfully logged in.`);
   app.use(
     jwt({
       secret: jwtSecret,
@@ -263,4 +273,20 @@ function createSession(username, req, res) {
   );
 }
 
-app.listen(8080, () => console.log('Listening on port 8080'));
+// Start the server
+const server = app.listen(8080, () => logger.info('Listening on port 8080'));
+
+/**
+ * Shutdown server and exit process if a shutdown signal was received.
+ * @param {*} name of the signal
+ */
+function shutdown(signal) {
+  logger.info(`Received ${signal} signal. Closing HTTP server...`);
+  server.close(() => {
+    logger.info('HTTP server closed.');
+  });
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
