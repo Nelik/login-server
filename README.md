@@ -16,12 +16,16 @@ This project was set up with NodeJS 16.X. Recommended version is 16.X or higher.
 
 ### AWS DynamoDB
 Set up an AWS DynamoDB in Oregon region and set the correcponding AWS profile as default profile on your local.
-More detailed instructions can be found here: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/SettingUp.DynamoWebService.html .
+
+More detailed instructions can be found here: https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/SettingUp.DynamoWebService.html.
+
 In DynamoDB create a table 'InterviewProjectUsers' with 'username' as a partition key.
 
 ### AWS Secrets Manager
 In the same account and region, set up AWS Secrets Manager.
-More detailed information can be found heere: https://docs.aws.amazon.com/secretsmanager/latest/userguide/asm_access.html .
+
+More detailed information can be found heere: https://docs.aws.amazon.com/secretsmanager/latest/userguide/asm_access.html.
+
 Choose some random, long, secure secret for JWT token generation and store it in the Secrets Manager as plain text under the name 'jwtKey'.
 
 ### Redis
@@ -45,5 +49,7 @@ To start the application run `npm start` in the root project directory.
 
 ### Deployment
 The server has been deployed in AWS on EC2 instance and listens on port 8080.
-Access through: http://34.220.165.194:8080/
+
+Access through: http://34.220.165.194:8080/.
+
 When starting communication with server, please send GET request to '/csrf-token' and store returned token as CSRF token in cookies.
