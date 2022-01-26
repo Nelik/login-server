@@ -84,9 +84,6 @@ app.use(
  * Create a token to protect against cross site request forgery.
  */
 app.get('/csrf-token', (req, res) => {
-  new Promise((resolve, reject) => {
-    setTimeout(() => reject('woops'), 5);
-  });
   res.json({ csrfToken: req.csrfToken() });
 });
 
