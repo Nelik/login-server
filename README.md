@@ -52,4 +52,4 @@ The server has been deployed in AWS on EC2 instance and listens on port 8080.
 
 Access through: http://34.220.165.194:8080/.
 
-When starting communication with server, please send GET request to '/csrf-token' and store returned token as CSRF token in cookies.
+**When starting communication with server, please send GET request to '/csrf-token' and store returned token as CSRF token in cookies first.**
