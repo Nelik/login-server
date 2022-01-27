@@ -80,6 +80,12 @@ app.use(
   )
 );
 
+// Catching uncaught exceptions
+process.on('uncaughtException', function (err) {
+  console.log('Caught exception: ' + err);
+  logger.error('Caught exception: ' + err);
+});
+
 /**
  * Create a token to protect against cross site request forgery.
  */
@@ -248,6 +254,14 @@ app.get('*', function (req, res) {
  */
 app.post('*', function (req, res) {
   res.status(httpStatusCodes.NOT_FOUND).json({ error: 'An invalid endpoint has been called.' });
+});
+
+/**
+ * Error handler for unexpected method which trigger and error
+ */
+app.use(function (err, req, res, next) {
+  logger.error(`Request: ${req.url}.\nStack Trace:\n${err.stack}`);
+  res.status(500).send('Something went wrong!');
 });
 
 /**
