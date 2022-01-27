@@ -127,11 +127,13 @@ app.get('/log-out', async (req, res) => {
  */
 app.post('/log-in', (req, res, next) => {
   const { username, password } = req.body;
+
   if (!username || !password) {
     logger.info('Login unsuccessfull. Some information is missing.');
     res.status(httpStatusCodes.BAD_REQUEST).json({ error: 'Log-in error. Username  and password are requiered.' });
     return;
   }
+
   logger.info('Logging in with user: ' + username);
   var params = {
     Key: {
@@ -159,6 +161,9 @@ app.post('/log-in', (req, res, next) => {
         logger.info(`${username} provided wrong password.`);
         res.status(httpStatusCodes.UNAUTHORIZED).json({ error: 'User or password is not valid.' });
       }
+    } else {
+      logger.info(`${username} doesn't exist in DB.`);
+      res.status(httpStatusCodes.UNAUTHORIZED).json({ error: 'User or password is not valid.' });
     }
   });
 });
